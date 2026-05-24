@@ -7,7 +7,7 @@ namespace TomodachiDrawer.UI.Avalonia
     /// <summary>TelemetryService handles reporting basic telemetry data to the developer. This is optional.</summary>
     internal class TelemetryService
     {
-        public static bool TelemetryEnabled { get; set; } = false;
+        public bool TelemetryEnabled { get; set; } = false;
 
         private const string TELEMETRY_URL = "https://telemetry.l7y.media/";
 
@@ -38,6 +38,7 @@ namespace TomodachiDrawer.UI.Avalonia
                 BaseAddress = new Uri(TELEMETRY_URL),
                 Timeout = TimeSpan.FromSeconds(3)
             };
+            _http.DefaultRequestHeaders.UserAgent.ParseAdd("TomodachiDrawer");
         }
 
         /// <summary>Sends startup data. Gets it all itself, just needs called.</summary>
@@ -62,8 +63,8 @@ namespace TomodachiDrawer.UI.Avalonia
 
             try
             {
-                await _http.PostAsJsonAsync("tomodachidrawer/startup", obj);
-                return true;
+                var response = await _http.PostAsJsonAsync("tomodachidrawer/startup", obj);
+                return response.IsSuccessStatusCode;
             }
             catch (Exception)
             {
@@ -78,8 +79,8 @@ namespace TomodachiDrawer.UI.Avalonia
 
             try
             {
-                await _http.PostAsJsonAsync("tomodachidrawer/image", imageData);
-                return true;
+                var response = await _http.PostAsJsonAsync("tomodachidrawer/image", imageData);
+                return response.IsSuccessStatusCode;
             }
             catch (Exception)
             {

@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private string _currentImagePath = string.Empty;
     private SKBitmap? _currentImage;
     private readonly CancellationTokenSource _cts = new();
+    private TelemetryService _telemetry;
 
     private bool BusyExporting = false;
 
@@ -87,9 +88,9 @@ public partial class MainWindow : Window
         if (CheckForUpdatesCheckBox.IsChecked)
             _ = PerformAsyncUpdateCheck();
 
+        _telemetry = new TelemetryService();
+
         Opened += MainWindow_Opened;
-
-
     }
 
     private bool IsVCRuntimeInstalled()
@@ -183,6 +184,13 @@ public partial class MainWindow : Window
                 new Uri("https://aka.ms/vc14/vc_redist.x64.exe"),
                 "Download Redistributable"
             );
+        }
+
+        if (_currentSettings.EnableTelemetry == true)
+        {
+            _telemetry.TelemetryEnabled = true;
+            // Discard to avoid blocking.
+            _ = _telemetry.ReportStart();
         }
     }
 
@@ -1232,7 +1240,7 @@ public partial class MainWindow : Window
         Close();
     }
 
-    private void MenuHelpOpenWelcome_Click(object? sender, RoutedEventArgs e) => ShowWelcomeMessage();
+    private async void MenuHelpOpenWelcome_Click(object? sender, RoutedEventArgs e) => await ShowWelcomeMessage();
 
     private void MenuHelpCheckForUpdate_Click(object? sender, RoutedEventArgs e) => _ = PerformAsyncUpdateCheck();
 
@@ -1245,6 +1253,7 @@ public partial class MainWindow : Window
     {
         var answer = await new TelemetryPrompt().ShowDialog<bool>(this);
         _currentSettings.EnableTelemetry = answer;
+        _telemetry.TelemetryEnabled = answer;
         SaveSettings();
     }
 }
