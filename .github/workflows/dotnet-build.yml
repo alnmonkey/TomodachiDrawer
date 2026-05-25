@@ -117,9 +117,8 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         path: unzipped-artifacts
-        pattern: TomodachiDrawer-Avalonia-*
+        pattern: TomodachiDrawer-Avalonia-*-Release
         merge-multiple: false
-        pattern: '*-Release'
     - name: Zip for Release
       run: |
         mkdir final-packages
