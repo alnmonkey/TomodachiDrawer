@@ -699,7 +699,7 @@ public partial class MainWindow : Window
             }
         }
 
-        _ = _telemetry.ReportImage(new TelemetryService.ImageEventDto(
+        _ = _telemetry.ReportImage(new ImageEventDto(
             imageWidth, imageHeight, colourCount, quantizerName, colourLimit,
             _currentSettings.SelectedSwitchVersion.ToString(),
             enableExperimental, totalTime.TotalSeconds, tspLimit
@@ -859,7 +859,7 @@ public partial class MainWindow : Window
             AppendLog($"Saved UF2 to {outputPath}");
         }
 
-        _ = _telemetry.ReportImage(new TelemetryService.ImageEventDto(
+        _ = _telemetry.ReportImage(new ImageEventDto(
             imageWidth, imageHeight, colourCount, quantizerName, colourLimit,
             _currentSettings.SelectedSwitchVersion.ToString(),
             enableExperimental, totalTime.TotalSeconds, tspLimit

@@ -1,9 +1,33 @@
-﻿using System.Net.Http.Json;
+using System.Net.Http.Json;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text.Json.Serialization;
 
 namespace TomodachiDrawer.UI.Avalonia
 {
+    internal record StartupEventDto(
+        string Os,
+        string OsVersion,
+        string Arch,
+        string AppVersion
+    );
+
+    internal record ImageEventDto(
+        int ImageWidth,
+        int ImageHeight,
+        int ImageColourCount,
+        string QuantizerMode,
+        int? ColourLimit,
+        string SwitchVersion,
+        bool ExperimentalFeatures,
+        double TotalDrawTimeSeconds,
+        double TspTimeLimit
+    );
+
+    [JsonSerializable(typeof(StartupEventDto))]
+    [JsonSerializable(typeof(ImageEventDto))]
+    internal partial class TelemetryJsonContext : JsonSerializerContext { }
+
     /// <summary>TelemetryService handles reporting basic telemetry data to the developer. This is optional.</summary>
     internal class TelemetryService
     {
@@ -12,26 +36,6 @@ namespace TomodachiDrawer.UI.Avalonia
         private const string TELEMETRY_URL = "https://telemetry.l7y.media/";
 
         private readonly HttpClient _http;
-
-        public record StartupEventDto(
-            string Os,
-            string OsVersion,
-            string Arch,
-            string AppVersion
-        );
-
-        public record ImageEventDto(
-            int ImageWidth,
-            int ImageHeight,
-            int ImageColourCount,
-            string QuantizerMode,
-            int? ColourLimit,
-            string SwitchVersion,
-            bool ExperimentalFeatures,
-            double TotalDrawTimeSeconds,
-            double TspTimeLimit
-        );
-
 
         public TelemetryService()
         {
@@ -50,7 +54,6 @@ namespace TomodachiDrawer.UI.Avalonia
             if (!TelemetryEnabled)
                 return false;
 
-            // startup contains basic system/app info.
             string os = OperatingSystem.IsLinux() ? "Linux" :
                 OperatingSystem.IsWindows() ? "Windows" :
                 OperatingSystem.IsMacOS() ? "macOS" : "Unknown";
@@ -65,7 +68,7 @@ namespace TomodachiDrawer.UI.Avalonia
 
             try
             {
-                var response = await _http.PostAsJsonAsync("tomodachidrawer/startup", obj);
+                var response = await _http.PostAsJsonAsync("tomodachidrawer/startup", obj, TelemetryJsonContext.Default.StartupEventDto);
                 return response.IsSuccessStatusCode;
             }
             catch (Exception)
@@ -81,7 +84,7 @@ namespace TomodachiDrawer.UI.Avalonia
 
             try
             {
-                var response = await _http.PostAsJsonAsync("tomodachidrawer/image", imageData);
+                var response = await _http.PostAsJsonAsync("tomodachidrawer/image", imageData, TelemetryJsonContext.Default.ImageEventDto);
                 return response.IsSuccessStatusCode;
             }
             catch (Exception)
