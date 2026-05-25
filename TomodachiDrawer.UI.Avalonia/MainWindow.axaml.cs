@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private string _currentImagePath = string.Empty;
     private SKBitmap? _currentImage;
     private readonly CancellationTokenSource _cts = new();
+    private TelemetryService _telemetry;
 
     private bool BusyExporting = false;
 
@@ -87,9 +88,9 @@ public partial class MainWindow : Window
         if (CheckForUpdatesCheckBox.IsChecked)
             _ = PerformAsyncUpdateCheck();
 
+        _telemetry = new TelemetryService();
+
         Opened += MainWindow_Opened;
-
-
     }
 
     private bool IsVCRuntimeInstalled()
@@ -156,13 +157,21 @@ public partial class MainWindow : Window
     {
         if (_currentSettings.FirstStartId != CURRENT_WELCOME_ID)
         {
-            ShowWelcomeMessage();
+            await ShowWelcomeMessage();
             _currentSettings.FirstStartId = CURRENT_WELCOME_ID;
         }
 
 #if DEBUG
         InsertDebugMenuItems();
 #endif
+
+        if (_currentSettings.EnableTelemetry == null)
+        {
+            // User hasnt agreed/disagreed.
+            var accepted = await new TelemetryPrompt().ShowDialog<bool>(this);
+            _currentSettings.EnableTelemetry = accepted;
+        }
+
         SaveSettings();
 
         if (!IsVCRuntimeInstalled())
@@ -176,12 +185,19 @@ public partial class MainWindow : Window
                 "Download Redistributable"
             );
         }
+
+        if (_currentSettings.EnableTelemetry == true)
+        {
+            _telemetry.TelemetryEnabled = true;
+            // Discard to avoid blocking.
+            _ = _telemetry.ReportStart();
+        }
     }
 
     // Welcome message stuff. For important changes, the ID is incremented by one by hand whenever something notable changes.
     // This is only really needed for Mac since its settings are saved in a way that persists more readily.
     private const int CURRENT_WELCOME_ID = 2;
-    private async void ShowWelcomeMessage()
+    private async Task ShowWelcomeMessage()
     {
         await ShowMessageAsync(
             "Welcome to TomodachiDrawer",
@@ -652,11 +668,64 @@ public partial class MainWindow : Window
             return;
         }
 
+        var colourCount = CountDistinctColours(_currentImage);
+        var imageWidth = _currentImage.Width;
+        var imageHeight = _currentImage.Height;
         var imageSnapshot = _currentImage!.Copy();
-        var drawSettings = GetDrawImageSettings();
+        var denoiser = DenoisingComboBox.SelectedItem?.ToString();
+        var tspLimit = (float)(TSPTimeLimitUpDown.Value ?? 0.5m);
+        var settings = GetQuantizerSettings();
+        var enableExperimental = EnableExperimentalMenuItem.IsChecked;
+        var enableHome = EnableHomeCanvas.IsChecked ?? false;
+        string quantizerName = ColourMatcherComboBox.SelectedItem!.ToString()!;
+        int? colourLimit = quantizerName == "Arbitrary" ? (int)(ColourLimitUpDown.Value ?? 32) : (int?)null;
 
         BusyExporting = true;
         ExportRP2040Button.IsEnabled = false;
+
+        var (uf2Bytes, totalTime) = await GenerateUF2Async(
+            imageSnapshot, settings, denoiser, tspLimit, enableExperimental, enableHome,
+            "Exporting to RP2040 flash");
+
+        if (uf2Bytes != null && uf2Bytes.Length > 0)
+        {
+            var drivePath = UF2Flasher.FindRP2040Drive();
+            if (drivePath != null && CanAccessRP2040Drive(drivePath))
+            {
+                File.WriteAllBytes(Path.Combine(drivePath, "tdld_image.uf2"), uf2Bytes);
+                AppendLog(
+                    "Wrote to RP2040 flash. Unplug the RP2040 and plug it into the switch without holding any button."
+                );
+            }
+        }
+
+        _ = _telemetry.ReportImage(new ImageEventDto(
+            imageWidth, imageHeight, colourCount, quantizerName, colourLimit,
+            _currentSettings.SelectedSwitchVersion.ToString(),
+            enableExperimental, totalTime.TotalSeconds, tspLimit
+        ));
+
+        BusyExporting = false;
+        ExportRP2040Button.IsEnabled = true;
+        SetEstimate(totalTime);
+    }
+
+    private void SetEstimate(TimeSpan time)
+    {
+        var estimateStr = $"{time:h\\hm\\ms\\s}";
+        DrawTimeLabel.Text = $"Draw Time Estimate: {estimateStr}";
+    }
+
+    private async Task<(byte[]? uf2Bytes, TimeSpan totalTime)> GenerateUF2Async(
+        SKBitmap imageSnapshot,
+        QuantizerSettings settings,
+        string? denoiser,
+        float tspLimit,
+        bool enableExperimental,
+        bool homeToTopLeft,
+        string logPrefix)
+    {
+        byte[]? uf2Bytes = null;
         TimeSpan totalTime = TimeSpan.MaxValue;
 
         await Task.Run(async () =>
@@ -667,7 +736,7 @@ public partial class MainWindow : Window
                 $"rp2040output{System.Random.Shared.Next(1000000, 9999999)}.tdld"
             );
 
-            AppendLog($"Exporting to RP2040 flash ({Path.GetFileName(tempPath)})");
+            AppendLog($"{logPrefix} ({Path.GetFileName(tempPath)})");
             var timingSink = new TimingSink();
             var drawer = new CanvasDrawer(
                 timingSink,
@@ -676,6 +745,15 @@ public partial class MainWindow : Window
             );
             drawer.ConnectAndConfirmController();
             AppendLog("Starting to generate inputs...");
+            var drawSettings = new DrawImageSettings()
+            {
+                QuantizerSettings = settings,
+                DenoiserName = denoiser,
+                TSPTimeLimit = tspLimit,
+                DisableLargeBrush = false,
+                EnableExperimentalFeatures = enableExperimental,
+                HomeToTopLeft = homeToTopLeft,
+            };
             await drawer.DrawImage(img, drawSettings);
             AppendLog($"True complete overall time is: {timingSink.TotalTime.TotalSeconds}s");
 
@@ -684,16 +762,7 @@ public partial class MainWindow : Window
             fileSink.Dispose();
 
             var tdldBytes = File.ReadAllBytes(tempPath);
-            var uf2Bytes = UF2Flasher.BuildTDLDUF2(tdldBytes);
-            var drivePath = UF2Flasher.FindRP2040Drive();
-
-            if (uf2Bytes != null && uf2Bytes.Length > 0 && drivePath != null && CanAccessRP2040Drive(drivePath))
-            {
-                File.WriteAllBytes(Path.Combine(drivePath, "tdld_image.uf2"), uf2Bytes);
-                AppendLog(
-                    "Wrote to RP2040 flash. Unplug the RP2040 and plug it into the switch without holding any button."
-                );
-            }
+            uf2Bytes = UF2Flasher.BuildTDLDUF2(tdldBytes);
 
 #if !DEBUG
             if (File.Exists(tempPath))
@@ -702,10 +771,7 @@ public partial class MainWindow : Window
             totalTime = timingSink.TotalTime;
         });
 
-        BusyExporting = false;
-        ExportRP2040Button.IsEnabled = true;
-
-        SetEstimate(totalTime);
+        return (uf2Bytes, totalTime);
     }
 
     private DrawImageSettings GetDrawImageSettings()
@@ -727,10 +793,13 @@ public partial class MainWindow : Window
         };
     }
 
-    private void SetEstimate(TimeSpan time)
+    private static int CountDistinctColours(SKBitmap img)
     {
-        var estimateStr = $"{time:h\\hm\\ms\\s}";
-        DrawTimeLabel.Text = $"Draw Time Estimate: {estimateStr}";
+        var pixels = new HashSet<SKColor>();
+        for (int y = 0; y < img.Height; y++)
+            for (int x = 0; x < img.Width; x++)
+                pixels.Add(img.GetPixel(x, y));
+        return pixels.Count;
     }
 
     private async void ExportUF2Button_Click(object sender, RoutedEventArgs e)
@@ -766,55 +835,38 @@ public partial class MainWindow : Window
         if (outputPath == null)
             return;
 
+        var colourCount = CountDistinctColours(_currentImage);
+        var imageWidth = _currentImage.Width;
+        var imageHeight = _currentImage.Height;
         var imageSnapshot = _currentImage!.Copy();
-        var drawSettings = GetDrawImageSettings();
+        var denoiser = DenoisingComboBox.SelectedItem?.ToString();
+        var tspLimit = (float)(TSPTimeLimitUpDown.Value ?? 0.5m);
+        var settings = GetQuantizerSettings();
+        var enableExperimental = EnableExperimentalMenuItem.IsChecked;
+        string quantizerName = ColourMatcherComboBox.SelectedItem!.ToString()!;
+        int? colourLimit = quantizerName == "Arbitrary" ? (int)(ColourLimitUpDown.Value ?? 32) : (int?)null;
 
         ExportUF2Button.IsEnabled = false;
         BusyExporting = true;
-        TimeSpan totalTime = TimeSpan.MaxValue;
 
-        await Task.Run(async () =>
+        var (uf2Bytes, totalTime) = await GenerateUF2Async(
+            imageSnapshot, settings, denoiser, tspLimit, enableExperimental, false,
+            "Exporting to UF2");
+
+        if (uf2Bytes != null && uf2Bytes.Length > 0)
         {
-            using var img = imageSnapshot;
-            string tempPath = Path.Combine(
-                Path.GetTempPath(),
-                $"rp2040output{System.Random.Shared.Next(1000000, 9999999)}.tdld"
-            );
+            File.WriteAllBytes(outputPath, uf2Bytes);
+            AppendLog($"Saved UF2 to {outputPath}");
+        }
 
-            AppendLog($"Exporting to UF2 ({Path.GetFileName(tempPath)})");
-            var timingSink = new TimingSink();
-            var drawer = new CanvasDrawer(
-                timingSink,
-                _currentSettings.SelectedSwitchVersion,
-                AppendLog
-            );
-            drawer.ConnectAndConfirmController();
-            AppendLog("Starting to generate inputs...");
-            await drawer.DrawImage(img, drawSettings);
-            AppendLog($"True complete overall time is: {timingSink.TotalTime.TotalSeconds}s");
-
-            var fileSink = new FileControllerSink(tempPath);
-            timingSink.ReplayTo(fileSink);
-            fileSink.Dispose();
-
-            var tdldBytes = File.ReadAllBytes(tempPath);
-            var uf2Bytes = UF2Flasher.BuildTDLDUF2(tdldBytes);
-
-            if (uf2Bytes != null && uf2Bytes.Length > 0)
-            {
-                File.WriteAllBytes(outputPath, uf2Bytes);
-                AppendLog($"Saved UF2 to {outputPath}");
-            }
-#if !DEBUG
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
-#endif
-            totalTime = timingSink.TotalTime;
-        });
+        _ = _telemetry.ReportImage(new ImageEventDto(
+            imageWidth, imageHeight, colourCount, quantizerName, colourLimit,
+            _currentSettings.SelectedSwitchVersion.ToString(),
+            enableExperimental, totalTime.TotalSeconds, tspLimit
+        ));
 
         ExportUF2Button.IsEnabled = true;
         BusyExporting = false;
-
         SetEstimate(totalTime);
     }
 
@@ -1224,12 +1276,20 @@ public partial class MainWindow : Window
         Close();
     }
 
-    private void MenuHelpOpenWelcome_Click(object? sender, RoutedEventArgs e) => ShowWelcomeMessage();
+    private async void MenuHelpOpenWelcome_Click(object? sender, RoutedEventArgs e) => await ShowWelcomeMessage();
 
     private void MenuHelpCheckForUpdate_Click(object? sender, RoutedEventArgs e) => _ = PerformAsyncUpdateCheck();
 
     private void EnableHomeCanvas_IsCheckedChanged(object? sender, RoutedEventArgs e)
     {
         // TODO: Notify if non 256x256 image.
+    }
+
+    private async void OpenTelemetryPrompt_Click(object? sender, RoutedEventArgs e)
+    {
+        var answer = await new TelemetryPrompt().ShowDialog<bool>(this);
+        _currentSettings.EnableTelemetry = answer;
+        _telemetry.TelemetryEnabled = answer;
+        SaveSettings();
     }
 }
