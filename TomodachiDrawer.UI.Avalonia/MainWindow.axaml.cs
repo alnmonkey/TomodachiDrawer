@@ -375,15 +375,23 @@ public partial class MainWindow : Window
             bool lastRp2040 = false, lastRp2350 = false;
             while (!_cts.Token.IsCancellationRequested)
             {
-                var rp2040Path = UF2Flasher.FindRP2040Drive();
-                var rp2350Path = UF2Flasher.FindRP2350Drive();
-
-                await Dispatcher.UIThread.InvokeAsync(() =>
+                try
                 {
-                    bool hasImage = _currentImage != null;
-                    lastRp2040 = UpdateChipUI(RPChipType.RP2040, rp2040Path, hasImage, lastRp2040);
-                    lastRp2350 = UpdateChipUI(RPChipType.RP2350, rp2350Path, hasImage, lastRp2350);
-                });
+                    var rp2040Path = UF2Flasher.FindRP2040Drive();
+                    var rp2350Path = UF2Flasher.FindRP2350Drive();
+
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        bool hasImage = _currentImage != null;
+                        lastRp2040 = UpdateChipUI(RPChipType.RP2040, rp2040Path, hasImage, lastRp2040);
+                        lastRp2350 = UpdateChipUI(RPChipType.RP2350, rp2350Path, hasImage, lastRp2350);
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch { }
 
                 try
                 {
@@ -722,31 +730,37 @@ public partial class MainWindow : Window
         BusyExporting = true;
         exportButton.IsEnabled = false;
 
-        var (uf2Bytes, totalTime) = await GenerateUF2Async(
-            chip, imageSnapshot, settings, denoiser, tspLimit, enableExperimental, enableHome,
-            $"Exporting to {chipName} flash");
-
-        if (uf2Bytes != null && uf2Bytes.Length > 0)
+        try
         {
-            var drivePath = UF2Flasher.FindDriveForChip(chip);
-            if (drivePath != null && CanAccessPicoDrive(drivePath))
+            var (uf2Bytes, totalTime) = await GenerateUF2Async(
+                chip, imageSnapshot, settings, denoiser, tspLimit, enableExperimental, enableHome,
+                $"Exporting to {chipName} flash");
+
+            if (uf2Bytes != null && uf2Bytes.Length > 0)
             {
-                File.WriteAllBytes(Path.Combine(drivePath, "tdld_image.uf2"), uf2Bytes);
-                AppendLog(
-                    $"Wrote to {chipName} flash. Unplug it and plug it into the switch without holding any button."
-                );
+                var drivePath = UF2Flasher.FindDriveForChip(chip);
+                if (drivePath != null && CanAccessPicoDrive(drivePath))
+                {
+                    File.WriteAllBytes(Path.Combine(drivePath, "tdld_image.uf2"), uf2Bytes);
+                    AppendLog(
+                        $"Wrote to {chipName} flash. Unplug it and plug it into the switch without holding any button."
+                    );
+                }
             }
+
+            _ = _telemetry.ReportImage(new ImageEventDto(
+                imageWidth, imageHeight, colourCount, quantizerName, colourLimit,
+                _currentSettings.SelectedSwitchVersion.ToString(),
+                enableExperimental, totalTime.TotalSeconds, tspLimit
+            ));
+
+            SetEstimate(totalTime);
         }
-
-        _ = _telemetry.ReportImage(new ImageEventDto(
-            imageWidth, imageHeight, colourCount, quantizerName, colourLimit,
-            _currentSettings.SelectedSwitchVersion.ToString(),
-            enableExperimental, totalTime.TotalSeconds, tspLimit
-        ));
-
-        BusyExporting = false;
-        exportButton.IsEnabled = true;
-        SetEstimate(totalTime);
+        finally
+        {
+            BusyExporting = false;
+            exportButton.IsEnabled = true;
+        }
     }
 
     private void SetEstimate(TimeSpan time)
@@ -892,25 +906,31 @@ public partial class MainWindow : Window
         exportUF2Button.IsEnabled = false;
         BusyExporting = true;
 
-        var (uf2Bytes, totalTime) = await GenerateUF2Async(
-            chip, imageSnapshot, settings, denoiser, tspLimit, enableExperimental, false,
-            "Exporting to UF2");
-
-        if (uf2Bytes != null && uf2Bytes.Length > 0)
+        try
         {
-            File.WriteAllBytes(outputPath, uf2Bytes);
-            AppendLog($"Saved UF2 to {outputPath}");
+            var (uf2Bytes, totalTime) = await GenerateUF2Async(
+                chip, imageSnapshot, settings, denoiser, tspLimit, enableExperimental, false,
+                "Exporting to UF2");
+
+            if (uf2Bytes != null && uf2Bytes.Length > 0)
+            {
+                File.WriteAllBytes(outputPath, uf2Bytes);
+                AppendLog($"Saved UF2 to {outputPath}");
+            }
+
+            _ = _telemetry.ReportImage(new ImageEventDto(
+                imageWidth, imageHeight, colourCount, quantizerName, colourLimit,
+                _currentSettings.SelectedSwitchVersion.ToString(),
+                enableExperimental, totalTime.TotalSeconds, tspLimit
+            ));
+
+            SetEstimate(totalTime);
         }
-
-        _ = _telemetry.ReportImage(new ImageEventDto(
-            imageWidth, imageHeight, colourCount, quantizerName, colourLimit,
-            _currentSettings.SelectedSwitchVersion.ToString(),
-            enableExperimental, totalTime.TotalSeconds, tspLimit
-        ));
-
-        exportUF2Button.IsEnabled = true;
-        BusyExporting = false;
-        SetEstimate(totalTime);
+        finally
+        {
+            exportUF2Button.IsEnabled = true;
+            BusyExporting = false;
+        }
     }
 
     private static string GetBaseFirmwareFilePath(RPChipType chip)
