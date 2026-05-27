@@ -69,7 +69,7 @@ public partial class MainWindow : Window
 
         DenoisingComboBox.ItemsSource = denoiserSelection;
         DenoisingComboBox.SelectedIndex = 0;
-        DenoisingComboBox.SelectionChanged += (_, _) => UpdatePreview();
+        DenoisingComboBox.SelectionChanged += async (_, _) => await UpdatePreviewAsync();
 
         InitializeTemplates();
 
@@ -134,7 +134,7 @@ public partial class MainWindow : Window
         {
             if (templateOutput.Success && templateOutput.Result != null)
             {
-                LoadImageFromBitmap(templateOutput.Result, $"template_{mask}.png");
+                await LoadImageFromBitmapAsync(templateOutput.Result, $"template_{mask}.png");
                 AppendLog($"Loaded masked image for template {mask.GetDescription()} from editor.");
             }
             else if (templateOutput.CouldNotLoad)
@@ -465,7 +465,7 @@ public partial class MainWindow : Window
     }
 
     #region Image/Preview
-    private void LoadImage(string path)
+    private async Task LoadImageAsync(string path)
     {
         if (!File.Exists(path))
         {
@@ -494,14 +494,14 @@ public partial class MainWindow : Window
             AppendLog($"Image resized to {newWidth}x{newHeight}");
         }
 
-        LoadImageFromBitmap(img, Path.GetFileName(path));
+        await LoadImageFromBitmapAsync(img, Path.GetFileName(path));
     }
 
     /// <summary>
     /// Stores <paramref name="img"/> as the active image and refreshes all dependent UI.
     /// Takes ownership of <paramref name="img"/> — do not dispose it after calling this.
     /// </summary>
-    private void LoadImageFromBitmap(SKBitmap img, string displayName)
+    private async Task LoadImageFromBitmapAsync(SKBitmap img, string displayName)
     {
         _currentImage?.Dispose();
         _currentImage = img;
@@ -517,24 +517,19 @@ public partial class MainWindow : Window
             EnableHomeCanvas.IsChecked = true;
         }
 
-        UpdatePreview();
+        await UpdatePreviewAsync();
         TSPTimeLimitUpDown.Value = (decimal)
             CanvasDrawer.GetRecommendedTSPSolveTime(img.Width, img.Height);
         AppendLog($"Loaded image: {displayName} ({img.Width}x{img.Height})");
     }
 
-    private SKBitmap GetPreview()
+    private SKBitmap GetPreview(SKBitmap source, QuantizerSettings quantizerSettings, string? denoiser)
     {
-        if (_currentImage == null)
-            throw new InvalidOperationException("No image loaded.");
-
         var pal = new ColourPalette(new DummySink());
-        var denoiser = DenoisingComboBox.SelectedItem?.ToString();
-        var quantizerSettings = GetQuantizerSettings();
-        return pal.PreviewColourMapping(_currentImage, quantizerSettings, denoiser);
+        return pal.PreviewColourMapping(source, quantizerSettings, denoiser);
     }
 
-    private void UpdatePreview()
+    private async Task UpdatePreviewAsync()
     {
         if (_currentImage == null)
         {
@@ -543,7 +538,10 @@ public partial class MainWindow : Window
         }
 
         var quantizerSettings = GetQuantizerSettings();
-        var preview = GetPreview();
+        var denoiser = DenoisingComboBox.SelectedItem?.ToString();
+        var source = _currentImage;
+
+        var preview = await Task.Run(() => GetPreview(source, quantizerSettings, denoiser)).ConfigureAwait(true);
 
         PreviewImage.Source = ToAvaloniaBitmap(preview);
         AppendLog(
@@ -656,13 +654,13 @@ public partial class MainWindow : Window
         );
 
         if (files.Count > 0)
-            LoadImage(files[0].TryGetLocalPath() ?? "");
+            await LoadImageAsync(files[0].TryGetLocalPath() ?? "");
     }
 
-    private void ColourMatcherComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private async void ColourMatcherComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_currentImage != null)
-            UpdatePreview();
+            await UpdatePreviewAsync();
         ColourLimitUpDown.IsEnabled =
             ColourMatcherComboBox?.SelectedValue?.ToString() == "Arbitrary";
     }
@@ -1034,19 +1032,19 @@ public partial class MainWindow : Window
             : DragDropEffects.None;
     }
 
-    private void OnDrop(object? sender, DragEventArgs e)
+    private async void OnDrop(object? sender, DragEventArgs e)
     {
         if (!e.DataTransfer.Contains(DataFormat.File))
             return;
         var first = e.DataTransfer.TryGetFiles()?.FirstOrDefault();
         if (first != null)
-            LoadImage(first.TryGetLocalPath() ?? "");
+            await LoadImageAsync(first.TryGetLocalPath() ?? "");
     }
 
     private void ColourLimitUpDown_ValueChanged(
         object? sender,
         NumericUpDownValueChangedEventArgs e
-    ) => UpdatePreview();
+    ) => _ = UpdatePreviewAsync();
 
     private void ThemeMenuItem_Click(object? sender, RoutedEventArgs e)
     {
@@ -1194,8 +1192,11 @@ public partial class MainWindow : Window
     {
         if (_currentImage == null)
             return;
-        // very scientific
-        var img = GetPreview();
+        // very scientific — capture UI state before going async
+        var quantizerSettings = GetQuantizerSettings();
+        var denoiser = DenoisingComboBox.SelectedItem?.ToString();
+        var source = _currentImage;
+        var img = await Task.Run(() => GetPreview(source, quantizerSettings, denoiser));
         // save it to disk... wherever desired.
         var file = await StorageProvider.SaveFilePickerAsync(
             new FilePickerSaveOptions

@@ -36,8 +36,7 @@ public partial class TemplateTool : Window
         var skiaMask = ImageMasker.GetMask(_mask);
         if (skiaMask == null)
         {
-            // Couldnt load the mask...
-            this.Close(new TemplateToolResponse(false, true, null));
+            Opened += (_, _) => this.Close(new TemplateToolResponse(false, true, null));
         }
         else
         {
