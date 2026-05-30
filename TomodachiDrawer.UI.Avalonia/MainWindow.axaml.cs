@@ -45,7 +45,8 @@ public partial class MainWindow : Window
 
     //private SwitchVersion _selectedSwitchVersion = SwitchVersion.None;
     //private int _selectedThemeIndex = 0; // 0 is System.
-    private AppSettings _currentSettings = new(); // All cases will result in it being non-null but IntelliSense cant see that far.
+    private AppSettings _currentSettings = new(); // All cases will result in it being non-null but IntelliSense cant see that far
+    private bool _loadingSettings = true;
 
 #if DEBUG
     private readonly VirtualGamepad _debugVirtualGamepad = new();
@@ -59,17 +60,20 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        var quantizers = ColourPalette.Quantizers.Keys.ToList();
-        quantizers.Insert(0, "Arbitrary");
-        ColourMatcherComboBox.ItemsSource = quantizers;
-        ColourMatcherComboBox.SelectedIndex = 0;
+        SetControlValueWithoutSaving(() =>
+        {
+            var quantizers = ColourPalette.Quantizers.Keys.ToList();
+            quantizers.Insert(0, "Arbitrary");
+            ColourMatcherComboBox.ItemsSource = quantizers;
+            ColourMatcherComboBox.SelectedIndex = 0;
 
-        var denoiserSelection = new List<string> { "None" };
-        denoiserSelection.AddRange(ImageDenoiser.Denoisers.Keys);
+            var denoiserSelection = new List<string> { "None" };
+            denoiserSelection.AddRange(ImageDenoiser.Denoisers.Keys);
 
-        DenoisingComboBox.ItemsSource = denoiserSelection;
-        DenoisingComboBox.SelectedIndex = 0;
-        DenoisingComboBox.SelectionChanged += async (_, _) => await UpdatePreviewAsync();
+            DenoisingComboBox.ItemsSource = denoiserSelection;
+            DenoisingComboBox.SelectedIndex = 0;
+            DenoisingComboBox.SelectionChanged += DenoisingComboBox_SelectionChanged;
+        });
 
         InitializeTemplates();
 
@@ -78,6 +82,7 @@ public partial class MainWindow : Window
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DropEvent, OnDrop);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
+
 
 #if DEBUG
         this.Title = $"TomodachiDrawer.UI.Avalonia - {GetVersionString(true)}";
@@ -665,6 +670,24 @@ public partial class MainWindow : Window
             await UpdatePreviewAsync();
         ColourLimitUpDown.IsEnabled =
             ColourMatcherComboBox?.SelectedValue?.ToString() == "Arbitrary";
+
+        if (!_loadingSettings && ColourMatcherComboBox?.SelectedItem?.ToString() is { } selectedColourMatcher)
+        {
+            _currentSettings.SelectedColourMatcher = selectedColourMatcher;
+            SaveSettings();
+        }
+    }
+
+    private async void DenoisingComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_currentImage != null)
+            await UpdatePreviewAsync();
+
+        if (!_loadingSettings && DenoisingComboBox?.SelectedItem?.ToString() is { } selectedDenoiser)
+        {
+            _currentSettings.SelectedDenoiser = selectedDenoiser;
+            SaveSettings();
+        }
     }
 
     private void TSPHelpButton_Click(object? sender, RoutedEventArgs e)
@@ -1049,7 +1072,17 @@ public partial class MainWindow : Window
     private void ColourLimitUpDown_ValueChanged(
         object? sender,
         NumericUpDownValueChangedEventArgs e
-    ) => _ = UpdatePreviewAsync();
+    )
+    {
+        if (!_loadingSettings)
+        {
+            _currentSettings.ColourLimit = (int)(ColourLimitUpDown.Value ?? 16);
+            SaveSettings();
+        }
+
+        if (_currentImage != null)
+            _ = UpdatePreviewAsync();
+    }
 
     private void ThemeMenuItem_Click(object? sender, RoutedEventArgs e)
     {
@@ -1149,24 +1182,73 @@ public partial class MainWindow : Window
         // if no images or we fail, fall to defaults in the appsettings class.
         _currentSettings ??= new AppSettings();
 
-        SwitchVersionComboBox.SelectedIndex =
-            (int)_currentSettings.SelectedSwitchVersion - 1;
-        SetTheme(_currentSettings.SelectedThemeIndex);
-        ThemeSystemMenuItem.IsChecked = _currentSettings.SelectedThemeIndex == 0;
-        ThemeLightMenuItem.IsChecked = _currentSettings.SelectedThemeIndex == 1;
-        ThemeDarkMenuItem.IsChecked = _currentSettings.SelectedThemeIndex == 2;
+        _loadingSettings = true;
+        try
+        {
+            SwitchVersionComboBox.SelectedIndex =
+                (int)_currentSettings.SelectedSwitchVersion - 1;
+            SetTheme(_currentSettings.SelectedThemeIndex);
+            ThemeSystemMenuItem.IsChecked = _currentSettings.SelectedThemeIndex == 0;
+            ThemeLightMenuItem.IsChecked = _currentSettings.SelectedThemeIndex == 1;
+            ThemeDarkMenuItem.IsChecked = _currentSettings.SelectedThemeIndex == 2;
 
-        EnableExperimentalMenuItem.IsChecked =
-            _currentSettings.EnableExperimentalFeatures;
-        CheckForUpdatesCheckBox.IsChecked = _currentSettings.CheckForUpdatesOnStart;
+            EnableExperimentalMenuItem.IsChecked =
+                _currentSettings.EnableExperimentalFeatures;
+            CheckForUpdatesCheckBox.IsChecked = _currentSettings.CheckForUpdatesOnStart;
+
+            SelectComboBoxItem(ColourMatcherComboBox, _currentSettings.SelectedColourMatcher);
+            ColourLimitUpDown.Value = _currentSettings.ColourLimit;
+            ColourLimitUpDown.IsEnabled =
+                ColourMatcherComboBox?.SelectedValue?.ToString() == "Arbitrary";
+            SelectComboBoxItem(DenoisingComboBox, _currentSettings.SelectedDenoiser);
+        }
+        finally
+        {
+            _loadingSettings = false;
+        }
+    }
+
+    private static void SelectComboBoxItem(ComboBox comboBox, string selectedItem)
+    {
+        var index = 0;
+        foreach (var item in comboBox.Items)
+        {
+            if (item?.ToString() == selectedItem)
+            {
+                comboBox.SelectedIndex = index;
+                return;
+            }
+
+            index++;
+        }
+    }
+
+    private void SetControlValueWithoutSaving(Action setControlValue)
+    {
+        var wasLoadingSettings = _loadingSettings;
+        _loadingSettings = true;
+        try
+        {
+            setControlValue();
+        }
+        finally
+        {
+            _loadingSettings = wasLoadingSettings;
+        }
     }
 
     private void SwitchVersionComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
+        if (_loadingSettings)
+            return;
+
         if (SwitchVersionComboBox.SelectedIndex == 0)
             _currentSettings.SelectedSwitchVersion = SwitchVersion.Switch1;
-        else
+        else if (SwitchVersionComboBox.SelectedIndex == 1)
             _currentSettings.SelectedSwitchVersion = SwitchVersion.Switch2;
+        else
+            _currentSettings.SelectedSwitchVersion = SwitchVersion.None;
+
         SaveSettings();
     }
 
