@@ -36,6 +36,22 @@
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
   </ItemGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' And '$(SentryUpload)' == 'true'">
+    <SentryOrg>l7y-media</SentryOrg>
+    <SentryProject>tomodachidrawer</SentryProject>
+    <SentryUploadSymbols>true</SentryUploadSymbols>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' And !$(RuntimeIdentifier.StartsWith('osx'))">
+    <PublishTrimmed>true</PublishTrimmed>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('osx'))">
+    <BundleMacOSApp>true</BundleMacOSApp>
+  </PropertyGroup>
   <ItemGroup>
     <None Update="TomodachiDrawer.Firmware.*.uf2">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
