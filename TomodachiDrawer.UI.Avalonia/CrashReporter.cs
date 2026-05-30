@@ -47,7 +47,7 @@ internal static partial class CrashReporter
 
             o.IsGlobalModeEnabled = true;
 
-            o.AutoSessionTracking = false;
+            o.AutoSessionTracking = true;
 
             o.Release = version;
 #if DEBUG
@@ -67,6 +67,8 @@ internal static partial class CrashReporter
         if (!_initialized)
             return;
 
+        // End the session as a normal exit so revoking consent isn't flushed as a crash.
+        SentrySdk.EndSession(SessionEndStatus.Exited);
         SentrySdk.Close();
         _initialized = false;
     }
